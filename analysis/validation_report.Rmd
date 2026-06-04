@@ -1,0 +1,153 @@
+---
+title: "ERA5-Land vs CHELSA Bioclim Validation"
+subtitle: "10° crop — Central North America (lon -100 to -90, lat 35 to 45)"
+date: "`r Sys.Date()`"
+output:
+  html_document:
+    toc: true
+    toc_float: true
+    fig_width: 10
+    fig_height: 6
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE, warning = FALSE, message = FALSE)
+library(terra)
+library(ggplot2)
+library(patchwork)
+
+VALID_DIR <- "/home/a474r867/scratch/chelsa_validation"
+results <- read.csv(file.path(VALID_DIR, "results", "validation_results.csv"))
+```
+
+## Summary
+
+Validation of ERA5-Land derived bioclimatic variables (1980-2020 mean) against 
+CHELSA v2.1 climatologies (1981-2010) over a 10° × 10° crop in central North America.
+
+**Key finding:** ERA5-Land temperature variables require **K → °C conversion** (subtract 273.15).
+Precipitation variables may need unit verification.
+
+```{r summary-table}
+knitr::kable(results[, c("variable", "correction", "correlation", "rmse")], 
+             digits = c(0, 0, 4, 2),
+             col.names = c("Variable", "Correction", "Correlation", "RMSE"))
+```
+
+## Temperature Variables (bio01–bio11)
+
+```{r temp-correlation}
+temp <- results[grepl("bio0[1-9]|bio1[01]", results$variable), ]
+ggplot(temp, aes(x = variable, y = correlation)) +
+  geom_col(fill = "tomato") +
+  geom_hline(yintercept = 0.9, linetype = "dashed", color = "darkgreen") +
+  labs(title = "Temperature: ERA5 vs CHELSA correlation (after K→°C)",
+       subtitle = paste("Mean r =", round(mean(temp$correlation), 4)),
+       y = "Pearson r", x = "") +
+  theme_minimal()
+```
+
+```{r temp-rmse}
+ggplot(temp, aes(x = variable, y = rmse)) +
+  geom_col(fill = "steelblue") +
+  labs(title = "Temperature: RMSE after correction",
+       subtitle = paste("Mean RMSE =", round(mean(temp$rmse), 2), "°C"),
+       y = "RMSE (°C)", x = "") +
+  theme_minimal()
+```
+
+## Precipitation Variables (bio12–bio19)
+
+```{r prec-correlation}
+prec <- results[grepl("bio1[2-9]", results$variable), ]
+ggplot(prec, aes(x = variable, y = correlation)) +
+  geom_col(fill = "darkgreen") +
+  geom_hline(yintercept = 0.9, linetype = "dashed", color = "darkgreen") +
+  labs(title = "Precipitation: ERA5 vs CHELSA correlation",
+       subtitle = paste("Mean r =", round(mean(prec$correlation), 4)),
+       y = "Pearson r", x = "") +
+  theme_minimal()
+```
+
+## Side-by-side Maps
+
+```{r maps, fig.height=12, fig.width=10}
+# Select a few representative variables
+vars_show <- c("bio01", "bio05", "bio06", "bio12", "bio15")
+par(mfrow = c(length(vars_show), 2), mar = c(2, 2, 2, 1))
+
+for (bio_id in vars_show) {
+  # Load CHELSA
+  chelsa_file <- file.path(VALID_DIR, "chelsa", paste0(bio_id, "_crop.tif"))
+  era5_file <- file.path(VALID_DIR, "era5land", paste0(bio_id, "_mean.tif"))
+  
+  if (file.exists(chelsa_file) && file.exists(era5_file)) {
+    c_r <- rast(chelsa_file)
+    e_r <- rast(era5_file)
+    
+    is_temp <- as.integer(sub("bio", "", bio_id)) <= 11
+    
+    if (is_temp) {
+      c_vals <- c_r / 10  # CHELSA: °C×10 → °C
+      e_vals <- e_r - 273.15  # ERA5: K → °C
+      unit <- "°C"
+    } else {
+      c_vals <- c_r
+      e_vals <- e_r
+      unit <- "mm"
+    }
+    
+    plot(c_vals, main = paste0("CHELSA ", bio_id, " (", unit, ")"))
+    plot(e_vals, main = paste0("ERA5 ", bio_id, " (", unit, ")"))
+  }
+}
+```
+
+## Scatter Plots
+
+```{r scatter, fig.height=10, fig.width=12}
+par(mfrow = c(3, 4), mar = c(4, 4, 2, 1))
+
+for (bio_id in sprintf("bio%02d", 1:11)) {
+  row <- results[results$variable == bio_id, ]
+  if (nrow(row) == 0) next
+  
+  chelsa_file <- file.path(VALID_DIR, "chelsa", paste0(bio_id, "_crop.tif"))
+  era5_file <- file.path(VALID_DIR, "era5land", paste0(bio_id, "_mean.tif"))
+  
+  if (file.exists(chelsa_file) && file.exists(era5_file)) {
+    c_vals <- values(rast(chelsa_file), na.rm = TRUE) / 10
+    e_vals <- values(rast(era5_file), na.rm = TRUE) - 273.15
+    
+    # Sample for scatter
+    n <- min(5000, length(c_vals))
+    idx <- sample(length(c_vals), n)
+    
+    plot(c_vals[idx], e_vals[idx], pch = ".", col = rgb(0, 0, 0, 0.3),
+         xlab = paste0("CHELSA ", bio_id, " (°C)"),
+         ylab = paste0("ERA5 ", bio_id, " (°C)"),
+         main = paste0(bio_id, " (r = ", round(row$correlation, 3), ")"))
+    abline(0, 1, col = "red", lwd = 2, lty = 2)
+  }
+}
+```
+
+## Recommendation
+
+```{r recommendation}
+temp_r <- mean(temp$correlation)
+prec_r <- mean(prec$correlation)
+
+if (temp_r > 0.90) {
+  cat("✅ **Temperature variables**: High correlation after K→°C correction.\n")
+  cat("   Apply `era5_temp - 273.15` before using in models.\n\n")
+} else {
+  cat("⚠️ **Temperature variables**: Low correlation. Further investigation needed.\n\n")
+}
+
+if (prec_r > 0.90) {
+  cat("✅ **Precipitation variables**: High correlation. No correction needed.\n")
+} else {
+  cat("⚠️ **Precipitation variables**: May need unit correction.\n")
+}
+```
