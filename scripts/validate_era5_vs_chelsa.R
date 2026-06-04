@@ -81,7 +81,11 @@ for (i in 1:19) {
   bio_id <- sprintf("bio%02d", i)
   if (is.null(chelsa_stack[[bio_id]]) || is.null(era5_stack[[bio_id]])) next
 
-  c_vals <- values(chelsa_stack[[bio_id]], na.rm = TRUE)
+  # Resample CHELSA (30 arc-sec ~1 km) to ERA5-Land grid (0.1° ~9 km)
+  # so both rasters have the same dimensions for cor()
+  chelsa_r <- resample(chelsa_stack[[bio_id]], era5_stack[[bio_id]], method = "bilinear")
+
+  c_vals <- values(chelsa_r, na.rm = TRUE)
   e_vals <- values(era5_stack[[bio_id]], na.rm = TRUE)
 
   is_temp <- (i <= 11)
